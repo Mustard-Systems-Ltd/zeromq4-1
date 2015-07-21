@@ -36,7 +36,8 @@
 
 zmq::xpub_t::xpub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     socket_base_t (parent_, tid_, sid_),
-    verbose (false),
+    verbose_subs (false),
+    verbose_unsubs (false),
     more (false),
     lossy (true)
 {
@@ -70,19 +71,21 @@ void zmq::xpub_t::xread_activated (pipe_t *pipe_)
         //  Apply the subscription to the trie
         unsigned char *const data = (unsigned char *) sub.data ();
         const size_t size = sub.size ();
-        if (size > 0 && (*data == 0 || *data == 1)) {
-            bool unique;
-            if (*data == 0)
-                unique = subscriptions.rm (data + 1, size - 1, pipe_);
-            else
-                unique = subscriptions.add (data + 1, size - 1, pipe_);
+        if (size > 0 && (*data == 0 || *data == 1)) {			
+		bool unique;
+		if (*data == 0)
+			unique = subscriptions.rm(data + 1, size - 1, pipe_);
+		else
+			unique = subscriptions.add(data + 1, size - 1, pipe_);
 
-            //  If the subscription is not a duplicate store it so that it can be
-            //  passed to used on next recv call. (Unsubscribe is not verbose.)
-            if (options.type == ZMQ_XPUB && (unique || (*data && verbose))) {
-                pending_data.push_back (blob_t (data, size));
-                pending_flags.push_back (0);
-            }
+		//  If the (un)subscription is not a duplicate store it so that it can be
+		//  passed to the user on next recv call unless verbose mode is enabled
+		//  which makes to pass always these messages.
+		if (options.type == ZMQ_XPUB && (unique || (*data == 1 && verbose_subs) ||
+				(*data == 0 && verbose_unsubs && verbose_subs))) {
+			pending_data.push_back(blob_t(data, size));
+			pending_flags.push_back(0);
+		}
         }
         else {
             //  Process user message coming upstream from xsub socket
@@ -106,7 +109,10 @@ int zmq::xpub_t::xsetsockopt (int option_, const void *optval_,
         return -1;
     }
     if (option_ == ZMQ_XPUB_VERBOSE)
-        verbose = (*static_cast <const int*> (optval_) != 0);
+        verbose_subs = (*static_cast <const int*> (optval_) != 0);
+    else
+    if (option_ == ZMQ_XPUB_VERBOSE_UNSUBSCRIBE)
+        verbose_unsubs = (*static_cast <const int*> (optval_) != 0);
     else
     if (option_ == ZMQ_XPUB_NODROP)
         lossy = (*static_cast <const int*> (optval_) == 0);
@@ -122,7 +128,7 @@ void zmq::xpub_t::xpipe_terminated (pipe_t *pipe_)
     //  Remove the pipe from the trie. If there are topics that nobody
     //  is interested in anymore, send corresponding unsubscriptions
     //  upstream.
-    subscriptions.rm (pipe_, send_unsubscription, this);
+    subscriptions.rm (pipe_, send_unsubscription, this, !verbose_unsubs);
 
     dist.pipe_terminated (pipe_);
 }
